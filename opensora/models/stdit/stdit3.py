@@ -16,6 +16,7 @@ from opensora.acceleration.communications import gather_forward_split_backward, 
 from opensora.acceleration.parallel_states import get_sequence_parallel_group
 from opensora.models.layers.blocks import (
     Attention,
+    RingFlashAttention,
     CaptionEmbedder,
     MultiHeadCrossAttention,
     PatchEmbed3D,
@@ -57,7 +58,7 @@ class STDiT3Block(nn.Module):
             attn_cls = SeqParallelAttention
             mha_cls = SeqParallelMultiHeadCrossAttention
         else:
-            attn_cls = Attention
+            attn_cls = RingFlashAttention
             mha_cls = MultiHeadCrossAttention
 
         self.norm1 = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)

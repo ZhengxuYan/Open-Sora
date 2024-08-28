@@ -54,7 +54,8 @@ def main():
     if is_distributed():
         colossalai.launch_from_torch({})
         coordinator = DistCoordinator()
-        enable_sequence_parallelism = coordinator.world_size > 1
+        # enable_sequence_parallelism = coordinator.world_size > 1
+        enable_sequence_parallelism = False
         if enable_sequence_parallelism:
             set_sequence_parallel_group(dist.group.WORLD)
     else:
