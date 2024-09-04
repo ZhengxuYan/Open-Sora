@@ -19,6 +19,7 @@ from colossalai.cluster.dist_coordinator import DistCoordinator
 
 
 def is_distributed():
+    print(f"os.environ world size: {os.environ.get('WORLD_SIZE', None)}")
     return os.environ.get("WORLD_SIZE", None) is not None
 
 

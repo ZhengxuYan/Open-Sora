@@ -27,6 +27,7 @@ from timm.models.vision_transformer import Mlp
 from opensora.acceleration.communications import all_to_all, split_forward_gather_backward
 from opensora.acceleration.parallel_states import get_sequence_parallel_group
 
+from opensora.models.layers.ring_flash_attn import ring_flash_attn_func
 from ring_attention_pytorch import ring_flash_attn
 
 approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -194,74 +195,75 @@ class Attention(nn.Module):
 
         if enable_flash_attn:
             from flash_attn import flash_attn_func
-            # # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
-            # q = q.permute(0, 2, 1, 3)
-            # k = k.permute(0, 2, 1, 3)
-            # v = v.permute(0, 2, 1, 3)
-            # x = flash_attn_func(
-            #     q,
-            #     k,
-            #     v,
-            #     dropout_p=self.attn_drop.p if self.training else 0.0,
-            #     softmax_scale=self.scale,
-            # )
-            with torch.profiler.profile(
-                activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-                ],
-                profile_memory=True
-            ) as prof:
-                start_time = time.time()
-                # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
-                q = q.permute(0, 2, 1, 3)
-                k = k.permute(0, 2, 1, 3)
-                v = v.permute(0, 2, 1, 3)
-                x = flash_attn_func(
-                    q,
-                    k,
-                    v,
-                    dropout_p=self.attn_drop.p if self.training else 0.0,
-                    softmax_scale=self.scale,
-                )
-                end_time = time.time()
-                attn_time = end_time - start_time
-            with open("vanilla_flash_logs.txt", "a") as text_file:
-                text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
-                text_file.write("\n")
-                text_file.write(f"Attn Time: {attn_time}: attn_time")
+            # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
+            q = q.permute(0, 2, 1, 3)
+            k = k.permute(0, 2, 1, 3)
+            v = v.permute(0, 2, 1, 3)
+            x = flash_attn_func(
+                q,
+                k,
+                v,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+                softmax_scale=self.scale,
+            )
+            # with torch.profiler.profile(
+            #     activities=[
+            #     torch.profiler.ProfilerActivity.CPU,
+            #     torch.profiler.ProfilerActivity.CUDA,
+            #     ],
+            #     profile_memory=True
+            # ) as prof:
+            #     start_time = time.time()
+            #     # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
+            #     q = q.permute(0, 2, 1, 3)
+            #     k = k.permute(0, 2, 1, 3)
+            #     v = v.permute(0, 2, 1, 3)
+            #     x = flash_attn_func(
+            #         q,
+            #         k,
+            #         v,
+            #         dropout_p=self.attn_drop.p if self.training else 0.0,
+            #         softmax_scale=self.scale,
+            #     )
+            #     end_time = time.time()
+            #     attn_time = end_time - start_time
+            # with open("vanilla_flash_logs.txt", "a") as text_file:
+            #     text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
+            #     text_file.write("\n")
+            #     text_file.write(f"Attn Time: {attn_time}: attn_time")
         else:
-            with torch.profiler.profile(
-                activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-                ],
-                profile_memory=True
-            ) as prof:
-                start_time = time.time()
-                dtype = q.dtype
-                q = q * self.scale
-                attn = q @ k.transpose(-2, -1)  # translate attn to float32
-                attn = attn.to(torch.float32)
-                attn = attn.softmax(dim=-1)
-                attn = attn.to(dtype)  # cast back attn to original dtype
-                attn = self.attn_drop(attn)
-                x = attn @ v
-                end_time = time.time()
-                attn_time = end_time - start_time
-            with open("vanilla_logs.txt", "a") as text_file:
-                text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
-                text_file.write("\n")
-                text_file.write(f"Attn Time: {attn_time}: attn_time")
-                # dtype = q.dtype
-                # q = q * self.scale
-                # attn = q @ k.transpose(-2, -1)  # translate attn to float32
-                # attn = attn.to(torch.float32)
-                # attn = attn.softmax(dim=-1)
-                # attn = attn.to(dtype)  # cast back attn to original dtype
-                # attn = self.attn_drop(attn)
-                # x = attn @ v
-
+            # with torch.profiler.profile(
+            #     activities=[
+            #     torch.profiler.ProfilerActivity.CPU,
+            #     torch.profiler.ProfilerActivity.CUDA,
+            #     ],
+            #     profile_memory=True
+            # ) as prof:
+            #     start_time = time.time()
+            #     dtype = q.dtype
+            #     q = q * self.scale
+            #     attn = q @ k.transpose(-2, -1)  # translate attn to float32
+            #     attn = attn.to(torch.float32)
+            #     attn = attn.softmax(dim=-1)
+            #     attn = attn.to(dtype)  # cast back attn to original dtype
+            #     attn = self.attn_drop(attn)
+            #     x = attn @ v
+            #     end_time = time.time()
+            #     attn_time = end_time - start_time
+            # with open("vanilla_logs.txt", "a") as text_file:
+            #     text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
+            #     text_file.write("\n")
+            #     text_file.write(f"Attn Time: {attn_time}: attn_time")
+            dtype = q.dtype
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)  # translate attn to float32
+            attn = attn.to(torch.float32)
+            attn = attn.softmax(dim=-1)
+            attn = attn.to(dtype)  # cast back attn to original dtype
+            attn = self.attn_drop(attn)
+            x = attn @ v
+    
+        print(f"X Shape: {x.shape}")
         x_output_shape = (B, N, C)
         if not enable_flash_attn:
             x = x.transpose(1, 2)
@@ -283,14 +285,6 @@ class RingFlashAttention(nn.Module):
         enable_flash_attn: bool = False,
         rope=None,
         qk_norm_legacy: bool = False,
-
-        bucket_size: int = 1024, 
-        ring_reduce_col: bool = False, 
-        striped_ring_attn: bool = False, 
-        max_lookback_seq_len: int = None, 
-        softclamp_qk_sim: bool = False, 
-        softclamp_value: float = 0.0,
-        ring_size: int = None
     ):
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -312,14 +306,6 @@ class RingFlashAttention(nn.Module):
         if rope is not None:
             self.rope = True
             self.rotary_emb = rope
-        
-        self.bucket_size = bucket_size
-        self.ring_reduce_col = ring_reduce_col
-        self.striped_ring_attn = striped_ring_attn
-        self.max_lookback_seq_len = max_lookback_seq_len
-        self.softclamp_qk_sim = softclamp_qk_sim
-        self.softclamp_value = softclamp_value
-        self.ring_size = ring_size
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
         B, N, C = x.shape
@@ -327,8 +313,8 @@ class RingFlashAttention(nn.Module):
         #enable_flash_attn = self.enable_flash_attn and (N > B)
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
-
         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
+        # B, self.num_heads, N, self.head_dim
         q, k, v = qkv.unbind(0)
         if self.qk_norm_legacy:
             # WARNING: this may be a bug
@@ -341,67 +327,272 @@ class RingFlashAttention(nn.Module):
             if self.rope:
                 q = self.rotary_emb(q)
                 k = self.rotary_emb(k)
-
-        # Reshape query, key, value for ring flash attention
-        # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
+        
         q = q.permute(0, 2, 1, 3)
         k = k.permute(0, 2, 1, 3)
         v = v.permute(0, 2, 1, 3)
+        print(f"Q Shape: {q.shape}")
+        print(f"K Shape: {k.shape}")
+        print(f"V Shape: {v.shape}")
 
-        # dtype = q.dtype
-        # q = q * self.scale
-        # q = q.to(torch.float32)
-        # k = k.to(torch.float32)
-        # v = v.to(torch.float32)
-
-        # with torch.profiler.profile(
-        #     activities=[
-        #     torch.profiler.ProfilerActivity.CPU,
-        #     torch.profiler.ProfilerActivity.CUDA,
-        #     ],
-        #     profile_memory=True
-        # ) as prof:
-        #     start_time = time.time()
-        #     print("Using Ring Attn")
-        #     outputs = ring_flash_attn(
-        #         q, k, v, 
-        #         mask, 
-        #         False, 
-        #         self.bucket_size, 
-        #         self.ring_reduce_col, 
-        #         self.striped_ring_attn, 
-        #         self.max_lookback_seq_len, 
-        #         self.ring_size, 
-        #         self.softclamp_qk_sim, 
-        #         self.softclamp_value
-        #     )
-        #     end_time = time.time()
-        #     attn_time = end_time - start_time
-        # with open("ring_logs.txt", "a") as text_file:
-        #     text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
-        #     text_file.write("\n")
-        #     text_file.write(f"Attn Time: {attn_time}: attn_time")
-        print(f"Using Ring Attn")
-        outputs = ring_flash_attn(
-            q, k, v, 
-            mask, 
-            False, 
-            self.bucket_size, 
-            self.ring_reduce_col, 
-            self.striped_ring_attn, 
-            self.max_lookback_seq_len, 
-            self.ring_size, 
-            self.softclamp_qk_sim, 
-            self.softclamp_value
+        outputs = ring_flash_attn_func(
+            q=q,
+            k=k,
+            v=v,
+            dropout_p=self.attn_drop.p,
+            causal=False,
+            window_size=(-1, -1),
+            alibi_slopes=None,
+            deterministic=False,
+            return_attn_probs=False,
         )
 
-        # outputs = outputs.to(dtype)
-        if self.attn_drop.p > 0:
-            raise NotImplementedError("Dropout not supported in RingFlashAttention")
         outputs = outputs.reshape(B, N, C)
         outputs = self.proj(outputs)
         outputs = self.proj_drop(outputs)
         return outputs
+
+# class RingFlashAttention(nn.Module):
+#     def __init__(
+#         self,
+#         dim: int,
+#         num_heads: int = 8,
+#         qkv_bias: bool = False,
+#         qk_norm: bool = False,
+#         attn_drop: float = 0.0,
+#         proj_drop: float = 0.0,
+#         norm_layer: nn.Module = LlamaRMSNorm,
+#         enable_flash_attn: bool = False,
+#         rope=None,
+#         qk_norm_legacy: bool = False,
+#     ):
+#         super().__init__()
+#         assert dim % num_heads == 0, "dim should be divisible by num_heads"
+#         self.dim = dim
+#         self.num_heads = num_heads
+#         self.head_dim = dim // num_heads
+#         self.scale = self.head_dim**-0.5
+#         self.enable_flash_attn = enable_flash_attn
+
+#         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+#         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+#         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+#         self.qk_norm_legacy = qk_norm_legacy
+#         self.attn_drop = nn.Dropout(attn_drop)
+#         self.proj = nn.Linear(dim, dim)
+#         self.proj_drop = nn.Dropout(proj_drop)
+
+#         self.rope = False
+#         if rope is not None:
+#             self.rope = True
+#             self.rotary_emb = rope
+
+#     def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
+#         B, N, C = x.shape
+#         # flash attn is not memory efficient for small sequences, this is empirical
+#         #enable_flash_attn = self.enable_flash_attn and (N > B)
+#         qkv = self.qkv(x)
+#         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
+#         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
+#         print(f"Num Heads: {self.num_heads}")
+#         print(f"Head Dim: {self.head_dim}")
+#         print(f"QKV Shape: {qkv.shape}")
+#         q, k, v = qkv.unbind(0)
+#         if self.qk_norm_legacy:
+#             # WARNING: this may be a bug
+#             if self.rope:
+#                 q = self.rotary_emb(q)
+#                 k = self.rotary_emb(k)
+#             q, k = self.q_norm(q), self.k_norm(k)
+#         else:
+#             q, k = self.q_norm(q), self.k_norm(k)
+#             if self.rope:
+#                 q = self.rotary_emb(q)
+#                 k = self.rotary_emb(k)
+#         # bind qkv together again, as the input of ring_flash_attn (B, N, 3, num_heads, head_dim)
+#         print(f"Q Shape: {q.shape}")
+#         print(f"K Shape: {k.shape}")
+#         print(f"V Shape: {v.shape}")
+#         qkv = torch.stack([q, k, v], dim=2).permute(0, 3, 2, 1, 4).contiguous()
+#         print(f"Final QKV Shape: {qkv.shape}")
+
+#         rank = dist.get_rank()
+#         world_size = dist.get_world_size()
+#         dtype = x.dtype
+#         device = torch.device(f"cuda:{rank}")
+
+#         dist.broadcast(qkv, src=0)
+
+#         local_qkv = qkv.chunk(world_size, dim=1)[rank].detach().clone()
+
+#         dist.barrier()
+#         fn = ring_flash_attn_qkvpacked_func
+
+#         local_dout = fn(
+#             local_qkv,
+#             dropout_p=self.attn_drop.p,
+#             causal=False,
+#             window_size=(-1, -1),
+#             alibi_slopes=None,
+#             deterministic=False,
+#             return_attn_probs=False,
+#         )
+
+#         dist.barrier()
+#         print(f"Local Dout Shape: {local_dout.shape}")
+
+#         outputs = gather_outputs(local_dout)
+#         print(f"Outputs Shape: {outputs.shape}")
+
+#         outputs = outputs.reshape(B, N, C)
+#         outputs = self.proj(outputs)
+#         outputs = self.proj_drop(outputs)
+#         return outputs
+
+# def gather_outputs(outputs):
+#     # outputs: Tensor computed locally on each GPU.
+#     rank = dist.get_rank()
+#     world_size = dist.get_world_size()
+#     # Create a list to hold the outputs from all processes
+#     gather_list = [torch.zeros_like(outputs) for _ in range(world_size)]
+#     # All gather
+#     dist.all_gather(gather_list, outputs)
+#     # Concatenate along a new dimension if needed or just use the gathered list
+#     concatenated_outputs = torch.cat(gather_list, dim=1)
+#     return concatenated_outputs
+
+
+# class RingFlashAttention(nn.Module):
+#     def __init__(
+#         self,
+#         dim: int,
+#         num_heads: int = 8,
+#         qkv_bias: bool = False,
+#         qk_norm: bool = False,
+#         attn_drop: float = 0.0,
+#         proj_drop: float = 0.0,
+#         norm_layer: nn.Module = LlamaRMSNorm,
+#         enable_flash_attn: bool = False,
+#         rope=None,
+#         qk_norm_legacy: bool = False,
+
+#         bucket_size: int = 1024, 
+#         ring_reduce_col: bool = True, 
+#         striped_ring_attn: bool = False, 
+#         max_lookback_seq_len: int = None, 
+#         softclamp_qk_sim: bool = False, 
+#         softclamp_value: float = 0.0,
+#         ring_size: int = None
+#     ):
+#         super().__init__()
+#         assert dim % num_heads == 0, "dim should be divisible by num_heads"
+#         self.dim = dim
+#         self.num_heads = num_heads
+#         self.head_dim = dim // num_heads
+#         self.scale = self.head_dim**-0.5
+#         self.enable_flash_attn = enable_flash_attn
+
+#         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+#         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+#         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+#         self.qk_norm_legacy = qk_norm_legacy
+#         self.attn_drop = nn.Dropout(attn_drop)
+#         self.proj = nn.Linear(dim, dim)
+#         self.proj_drop = nn.Dropout(proj_drop)
+
+#         self.rope = False
+#         if rope is not None:
+#             self.rope = True
+#             self.rotary_emb = rope
+        
+#         self.bucket_size = bucket_size
+#         self.ring_reduce_col = ring_reduce_col
+#         self.striped_ring_attn = striped_ring_attn
+#         self.max_lookback_seq_len = max_lookback_seq_len
+#         self.softclamp_qk_sim = softclamp_qk_sim
+#         self.softclamp_value = softclamp_value
+#         self.ring_size = ring_size
+
+#     def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
+#         B, N, C = x.shape
+#         # flash attn is not memory efficient for small sequences, this is empirical
+#         #enable_flash_attn = self.enable_flash_attn and (N > B)
+#         qkv = self.qkv(x)
+#         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
+
+#         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
+#         q, k, v = qkv.unbind(0)
+#         if self.qk_norm_legacy:
+#             # WARNING: this may be a bug
+#             if self.rope:
+#                 q = self.rotary_emb(q)
+#                 k = self.rotary_emb(k)
+#             q, k = self.q_norm(q), self.k_norm(k)
+#         else:
+#             q, k = self.q_norm(q), self.k_norm(k)
+#             if self.rope:
+#                 q = self.rotary_emb(q)
+#                 k = self.rotary_emb(k)
+
+#         # Reshape query, key, value for ring flash attention
+#         # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
+#         q = q.permute(0, 2, 1, 3)
+#         k = k.permute(0, 2, 1, 3)
+#         v = v.permute(0, 2, 1, 3)
+
+#         # dtype = q.dtype
+#         # q = q * self.scale
+#         # q = q.to(torch.float32)
+#         # k = k.to(torch.float32)
+#         # v = v.to(torch.float32)
+
+#         with torch.profiler.profile(
+#             activities=[
+#             torch.profiler.ProfilerActivity.CPU,
+#             torch.profiler.ProfilerActivity.CUDA,
+#             ],
+#             profile_memory=True
+#         ) as prof:
+#             start_time = time.time()
+#             print("Using Ring Attn")
+#             outputs = ring_flash_attn(
+#                 q, k, v, 
+#                 mask, 
+#                 False, 
+#                 self.bucket_size, 
+#                 self.ring_reduce_col, 
+#                 self.striped_ring_attn, 
+#                 self.max_lookback_seq_len, 
+#                 self.ring_size, 
+#                 self.softclamp_qk_sim, 
+#                 self.softclamp_value
+#             )
+#             end_time = time.time()
+#             attn_time = end_time - start_time
+#         with open("ring_logs.txt", "a") as text_file:
+#             text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
+#             text_file.write("\n")
+#             text_file.write(f"Attn Time: {attn_time}: attn_time")
+#         # outputs = ring_flash_attn(
+#         #     q, k, v, 
+#         #     mask, 
+#         #     False, 
+#         #     self.bucket_size, 
+#         #     self.ring_reduce_col, 
+#         #     self.striped_ring_attn, 
+#         #     self.max_lookback_seq_len, 
+#         #     self.ring_size, 
+#         #     self.softclamp_qk_sim, 
+#         #     self.softclamp_value
+#         # )
+
+#         # outputs = outputs.to(dtype)
+#         if self.attn_drop.p > 0:
+#             raise NotImplementedError("Dropout not supported in RingFlashAttention")
+#         outputs = outputs.reshape(B, N, C)
+#         outputs = self.proj(outputs)
+#         outputs = self.proj_drop(outputs)
+#         return outputs
 
 class KVCompressAttention(nn.Module):
     def __init__(

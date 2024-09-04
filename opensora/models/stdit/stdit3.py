@@ -1,4 +1,6 @@
 import os
+import time
+import torch.cuda
 
 import numpy as np
 import torch
@@ -58,7 +60,7 @@ class STDiT3Block(nn.Module):
             attn_cls = SeqParallelAttention
             mha_cls = SeqParallelMultiHeadCrossAttention
         else:
-            attn_cls = RingFlashAttention
+            attn_cls = Attention
             mha_cls = MultiHeadCrossAttention
 
         self.norm1 = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)
@@ -122,7 +124,29 @@ class STDiT3Block(nn.Module):
             x_m = rearrange(x_m, "(B S) T C -> B (T S) C", T=T, S=S)
         else:
             x_m = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S)
+            # with torch.profiler.profile(
+            #     activities=[
+            #     torch.profiler.ProfilerActivity.CPU,
+            #     torch.profiler.ProfilerActivity.CUDA,
+            #     ],
+            #     profile_memory=True
+            # ) as prof:
+            #     start_time = time.time()
+            #     x_m = self.attn(x_m)
+            #     end_time = time.time()
+            #     attn_time = end_time - start_time
+            # with open("ring_logs.txt", "a") as text_file:
+            #     text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
+            #     text_file.write("\n")
+            #     text_file.write(f"Attn Time: {attn_time}\n")
+            begin = torch.cuda.Event(enable_timing=True)
+            begin.record()
             x_m = self.attn(x_m)
+            end = torch.cuda.Event(enable_timing=True)
+            end.record()
+            torch.cuda.synchronize()
+            with open("seqparallel_logs.txt", "a") as text_file:
+                text_file.write(f"Attn Time: {begin.elapsed_time(end)}\n")
             x_m = rearrange(x_m, "(B T) S C -> B (T S) C", T=T, S=S)
 
         # modulate (attention)
