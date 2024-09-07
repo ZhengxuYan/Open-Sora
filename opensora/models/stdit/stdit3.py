@@ -57,7 +57,7 @@ class STDiT3Block(nn.Module):
         self.enable_sequence_parallelism = enable_sequence_parallelism
 
         if self.enable_sequence_parallelism and not temporal:
-            attn_cls = SeqParallelAttention
+            attn_cls = RingFlashAttention
             mha_cls = SeqParallelMultiHeadCrossAttention
         else:
             attn_cls = Attention
@@ -124,29 +124,25 @@ class STDiT3Block(nn.Module):
             x_m = rearrange(x_m, "(B S) T C -> B (T S) C", T=T, S=S)
         else:
             x_m = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S)
-            # with torch.profiler.profile(
-            #     activities=[
-            #     torch.profiler.ProfilerActivity.CPU,
-            #     torch.profiler.ProfilerActivity.CUDA,
-            #     ],
-            #     profile_memory=True
-            # ) as prof:
-            #     start_time = time.time()
-            #     x_m = self.attn(x_m)
-            #     end_time = time.time()
-            #     attn_time = end_time - start_time
-            # with open("ring_logs.txt", "a") as text_file:
-            #     text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
-            #     text_file.write("\n")
-            #     text_file.write(f"Attn Time: {attn_time}\n")
+            torch.cuda.reset_peak_memory_stats()
             begin = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
             begin.record()
             x_m = self.attn(x_m)
-            end = torch.cuda.Event(enable_timing=True)
             end.record()
             torch.cuda.synchronize()
-            with open("seqparallel_logs.txt", "a") as text_file:
-                text_file.write(f"Attn Time: {begin.elapsed_time(end)}\n")
+
+            peak_memory_allocated = torch.cuda.max_memory_allocated()
+            peak_memory_reserved = torch.cuda.max_memory_reserved()
+
+            with open("ring_logs.txt", "a") as text_file:
+                text_file.write(f"Current GPU Rank: {dist.get_rank()}\n")
+                text_file.write(f"Attn Time: {begin.elapsed_time(end)} ms\n")
+                text_file.write(f"Peak Memory Allocated: {peak_memory_allocated / 1024 / 1024} MB\n")
+                text_file.write(f"Peak Memory Reserved: {peak_memory_reserved / 1024 / 1024} MB\n")
+                text_file.write("\n")
+
+            # x_m = self.attn(x_m)
             x_m = rearrange(x_m, "(B T) S C -> B (T S) C", T=T, S=S)
 
         # modulate (attention)

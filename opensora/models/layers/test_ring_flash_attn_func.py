@@ -6,6 +6,7 @@ import torch.distributed as dist
 from ring_flash_attn import ring_flash_attn_qkvpacked_func
 
 import random
+import time
 
 
 def set_seed(rank, seed=42):
@@ -81,30 +82,78 @@ if __name__ == "__main__":
         print("# forward:")
         print("#" * 30)
 
-    out, lse, _ = flash_attn_qkvpacked_func(
-        qkv,
-        dropout_p=dropout_p,
-        causal=causal,
-        window_size=(-1, -1),
-        alibi_slopes=None,
-        deterministic=deterministic,
-        return_attn_probs=True,
-    )
+    # out, lse, _ = flash_attn_qkvpacked_func(
+    #     qkv,
+    #     dropout_p=dropout_p,
+    #     causal=causal,
+    #     window_size=(-1, -1),
+    #     alibi_slopes=None,
+    #     deterministic=deterministic,
+    #     return_attn_probs=True,
+    # )
+    with torch.profiler.profile(
+        activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+        ],
+        profile_memory=True
+    ) as prof:
+        start_time = time.time()
+        out, lse, _ = flash_attn_qkvpacked_func(
+            qkv,
+            dropout_p=dropout_p,
+            causal=causal,
+            window_size=(-1, -1),
+            alibi_slopes=None,
+            deterministic=deterministic,
+            return_attn_probs=True,
+        )
+        end_time = time.time()
+        attn_time = end_time - start_time
+    with open("flash_test.txt", "a") as text_file:
+        text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
+        text_file.write("\n")
+        text_file.write(f"Attn Time: {attn_time}\n")
 
     local_out = out.chunk(world_size, dim=1)[rank]
     local_lse = lse.chunk(world_size, dim=-1)[rank]
 
     fn = ring_flash_attn_qkvpacked_func
 
-    ring_out, ring_lse, _ = fn(
-        local_qkv,
-        dropout_p=dropout_p,
-        causal=causal,
-        window_size=(-1, -1),
-        alibi_slopes=None,
-        deterministic=deterministic,
-        return_attn_probs=True,
-    )
+    # ring_out, ring_lse, _ = fn(
+    #     local_qkv,
+    #     dropout_p=dropout_p,
+    #     causal=causal,
+    #     window_size=(-1, -1),
+    #     alibi_slopes=None,
+    #     deterministic=deterministic,
+    #     return_attn_probs=True,
+    # )
+    with torch.profiler.profile(
+        activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+        ],
+        profile_memory=True
+    ) as prof:
+        start_time = time.time()
+        ring_out, ring_lse, _ = fn(
+            local_qkv,
+            dropout_p=dropout_p,
+            causal=causal,
+            window_size=(-1, -1),
+            alibi_slopes=None,
+            deterministic=deterministic,
+            return_attn_probs=True,
+        )
+        end_time = time.time()
+        attn_time = end_time - start_time
+    with open("ring_test.txt", "a") as text_file:
+        text_file.write(prof.key_averages().table(sort_by="self_cuda_memory_usage"))
+        text_file.write("\n")
+        text_file.write(f"Attn Time: {attn_time}\n")
+
+
     print("ring_out.shape", ring_out.shape)
     log("out", out, rank0_only=True)
     log("lse", lse, rank0_only=True)

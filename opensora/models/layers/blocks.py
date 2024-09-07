@@ -172,10 +172,6 @@ class Attention(nn.Module):
         B, N, C = x.shape
         # flash attn is not memory efficient for small sequences, this is empirical
         enable_flash_attn = self.enable_flash_attn and (N > B)
-        print(f"Enable Flash Attn: {enable_flash_attn}")
-        print(f"N: {N}")
-        print(f"B: {B}")
-        print(f"C: {C}")
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
 
@@ -263,7 +259,6 @@ class Attention(nn.Module):
             attn = self.attn_drop(attn)
             x = attn @ v
     
-        print(f"X Shape: {x.shape}")
         x_output_shape = (B, N, C)
         if not enable_flash_attn:
             x = x.transpose(1, 2)
@@ -754,12 +749,14 @@ class SeqParallelAttention(Attention):
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
         qkv = qkv.view(qkv_shape)
+        print(f"QKV Shape: {qkv.shape}")
 
         sp_group = get_sequence_parallel_group()
 
         # apply all_to_all to gather sequence and split attention heads
         # [B, SUB_N, 3, NUM_HEAD, HEAD_DIM] -> [B, N, 3, NUM_HEAD_PER_DEVICE, HEAD_DIM]
         qkv = all_to_all(qkv, sp_group, scatter_dim=3, gather_dim=1)
+        print(f"QKV Shape After All to All: {qkv.shape}")
 
         if self.enable_flash_attn:
             qkv_permute_shape = (
@@ -782,6 +779,9 @@ class SeqParallelAttention(Attention):
         # ERROR: Should qk_norm first
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
+        print(f"Q Shape: {q.shape}")
+        print(f"K Shape: {k.shape}")
+        print(f"V Shape: {v.shape}")
         if self.enable_flash_attn:
             from flash_attn import flash_attn_func
 
@@ -807,7 +807,9 @@ class SeqParallelAttention(Attention):
 
         # apply all to all to gather back attention heads and split sequence
         # [B, N, NUM_HEAD_PER_DEVICE, HEAD_DIM]  -> [B, SUB_N, NUM_HEAD, HEAD_DIM]
+        print(f"After Attention x: {x.shape}")
         x = all_to_all(x, sp_group, scatter_dim=1, gather_dim=2)
+        print(f"After last All to All x: {x.shape}")
 
         # reshape outputs back to [B, N, C]
         x_output_shape = (B, N, C)

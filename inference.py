@@ -54,8 +54,8 @@ def main():
     if is_distributed():
         colossalai.launch_from_torch({})
         coordinator = DistCoordinator()
-        # enable_sequence_parallelism = coordinator.world_size > 1
-        enable_sequence_parallelism = False
+        enable_sequence_parallelism = coordinator.world_size > 1
+        # enable_sequence_parallelism = False
         if enable_sequence_parallelism:
             set_sequence_parallel_group(dist.group.WORLD)
     else:
@@ -264,6 +264,7 @@ def main():
                 torch.manual_seed(1024)
                 z = torch.randn(len(batch_prompts), vae.out_channels, *latent_size, device=device, dtype=dtype)
                 masks = apply_mask_strategy(z, refs, ms, loop_i, align=align)
+                start_time = time.time()
                 samples = scheduler.sample(
                     model,
                     text_encoder,
@@ -276,6 +277,8 @@ def main():
                 )
                 samples = vae.decode(samples.to(dtype), num_frames=num_frames)
                 video_clips.append(samples)
+                end_time = time.time()
+                logger.info("Inference time: %.2f sec", end_time - start_time)
 
             # == save samples ==
             if is_main_process():
